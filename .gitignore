@@ -130,3 +130,10 @@ dmypy.json
 
 .idea/
 data/
+cheng/data/
+weights/
+.vscode/
+pretrained_ecapa/
+pretrained_models/
+*.pkl
+*.wav
