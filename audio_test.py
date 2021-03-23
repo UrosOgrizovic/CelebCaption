@@ -17,6 +17,8 @@ import wget
 from speechbrain.pretrained import SepformerSeparation as separator
 import sounddevice as sd
 import pickle
+import tensorflow as tf
+import torch
 
 
 def PlayVideo(video_path):
@@ -79,20 +81,28 @@ def extract_text_from_audio(audio_path):
     return text
 
 
-def predict_vggvox(model_weights_path, audio_path):
+def predict_vggvox(model_weights_path, audio_path, num_speakers):
     vggvox_model = load_model(model_weights_path)
-    _, wave = scipy.io.wavfile.read(audio_path, mmap=True)
+    predictions = []
+    for i in range(num_speakers):
+        # _, wave = scipy.io.wavfile.read(audio_path, mmap=True)
+        _, wave = scipy.io.wavfile.read(f'data/test/audio/diarized/speaker_{i}.wav', mmap=True)
 
-    processed = process_audio(wave)
-    assert len(processed.shape) == 3
-    assert processed.shape[0] == 512
-    assert processed.shape[2] == 1
-    # there's only one sample in the batch, so add 1 as the first dim
-    processed = np.expand_dims(processed, axis=0)
+        processed = process_audio(wave)
+        assert len(processed.shape) == 3
+        assert processed.shape[0] == 512
+        assert processed.shape[2] == 1
+        # there's only one sample in the batch, so add 1 as the first dim
+        processed = np.expand_dims(processed, axis=0)
 
-    prediction = vggvox_model.predict(processed).flatten()
-    print(prediction, np.argmax(prediction), prediction.shape)
-    print(prediction[np.argmax(prediction)], read_csv('vox1_meta.csv')[np.argmax(prediction)])
+        prediction = vggvox_model.predict(processed).flatten()
+        name = read_csv('vox1_meta.csv')[np.argmax(prediction)]
+        name = name.replace('_', ' ')
+        predictions.append((name, prediction[np.argmax(prediction)]))
+    i = 1
+    for name, prob in predictions:
+        print(f"Speaker #{i} is {name} with {round(prob*100, 2)}% confidence")
+        i += 1
 
 
 def speaker_diarization(audio_path):
@@ -105,24 +115,36 @@ def speaker_diarization(audio_path):
     est_sources = est_sources[0]    # strip batch dimension
 
     pickle.dump(est_sources, open('est_sources.pkl', 'wb'))
-    return est_sources.shape[1] # return the number of speakers
+    num_speakers = est_sources.shape[1]
+    for i in range(num_speakers):
+        torchaudio.save(f'data/test/audio/diarized/speaker_{i}.wav', torch.unsqueeze(est_sources[:, i], 0), 8000)
+    return num_speakers
 
 
-def play_diarized_sounds(num_speakers):
+def play_diarized_sounds():
     fs = 8000
     est_sources = pickle.load(open('est_sources.pkl', 'rb'))
+    num_speakers = est_sources.shape[1]
+
+    for val in est_sources[:, 0]:
+        if val.item() > 1e-4 and round(val.item()) != val.item():
+            print(val)
+            exit()
+    exit()
     for i in range(num_speakers):
-        sd.play(est_sources[:, i], fs)
-        sd.wait()
+        torchaudio.save(f'speaker_{i}.wav', tf.expand_dims(est_sources[:, i], -1), fs)
+        exit()
+        # sd.play(est_sources[:, i], fs)
+        # sd.wait()
 
 
 if __name__ == '__main__':
     video_path = "data/test/video/Bradley Cooper, Lady Gaga/Bradley Cooper, Lady Gaga.mp4"
+    model_path = "weights\with-augmentation.hdf5"
     # PlayVideo(video_path)
     audio_path = extract_audio_from_video(video_path)
     # text = extract_text_from_audio(audio_path)
     # print(text)
     num_speakers = speaker_diarization(audio_path)
-    play_diarized_sounds(num_speakers)
-    # model_path = "weights\with-augmentation.hdf5"
-    # predict_vggvox(model_path, audio_path)
+    # play_diarized_sounds()
+    predict_vggvox(model_path, audio_path, num_speakers)
