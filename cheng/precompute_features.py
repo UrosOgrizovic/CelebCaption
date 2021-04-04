@@ -34,33 +34,36 @@ class FaceExtractor(object):
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps    = cap.get(cv2.CAP_PROP_FPS)
         print("length: {}, w x h: {} x {}, fps: {}".format(length, width, height, fps))
+        face_detection_period = 10  # face detection will be done every n frames
+
+        frame_index = -1
         # infinite loop, break by key ESC
-        frame_counter = 0
         while cap.isOpened():
             ret, frame = cap.read()
             if ret:
-                frame_counter = frame_counter + 1
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = face_cascade.detectMultiScale(
-                    gray,
-                    scaleFactor=1.2,
-                    minNeighbors=10,
-                    minSize=(64, 64)
-                )
-                # only keep the biggest face as the main subject
-                face = None
-                if len(faces) > 1:  # Get the largest face as main face
-                    face = max(faces, key=lambda rectangle: (rectangle[2] * rectangle[3]))  # area = w * h
-                elif len(faces) == 1:
-                    face = faces[0]
-                if face is not None:
-                    face_img, cropped = face_helpers.crop_face(frame, face, margin=40, size=self.face_size)
-                    (x, y, w, h) = cropped
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 200, 0), 2)
-                    cv2.imshow('Faces', frame)
-                    imgfile = os.path.basename(video_file).replace(".","_") +"_"+ str(frame_counter) + ".png"
-                    imgfile = os.path.join(save_folder, imgfile)
-                    cv2.imwrite(imgfile, face_img)
+                frame_index = frame_index + 1
+                if frame_index % face_detection_period == 0:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    faces = face_cascade.detectMultiScale(
+                        gray,
+                        scaleFactor=1.2,
+                        minNeighbors=10,
+                        minSize=(64, 64)
+                    )
+                    # only keep the biggest face as the main subject
+                    face = None
+                    if len(faces) > 1:  # Get the largest face as main face
+                        face = max(faces, key=lambda rectangle: (rectangle[2] * rectangle[3]))  # area = w * h
+                    elif len(faces) == 1:
+                        face = faces[0]
+                    if face is not None:
+                        face_img, cropped = face_helpers.crop_face(frame, face, margin=40, size=self.face_size)
+                        (x, y, w, h) = cropped
+                        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 200, 0), 2)
+                        cv2.imshow('Faces', frame)
+                        imgfile = os.path.basename(video_file).replace(".","_") +"_"+ str(frame_index) + ".png"
+                        imgfile = os.path.join(save_folder, imgfile)
+                        cv2.imwrite(imgfile, face_img)
             if cv2.waitKey(5) == 27:  # ESC key press
                 break
             if cap.get(cv2.CAP_PROP_POS_FRAMES) == cap.get(cv2.CAP_PROP_FRAME_COUNT):

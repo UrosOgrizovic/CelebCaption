@@ -40,7 +40,7 @@ def extract_face(filename, required_size=(224, 224)):
 if __name__ == "__main__":
     model = VGGFace()
     # load_images()
-    img = extract_face('data/bradleycooper.jpg')
+    img = extract_face('data/benstiller.jpg')
     img = np.array(img).astype(np.float)
     x = image.img_to_array(img)
     x = np.expand_dims(x, axis=0)

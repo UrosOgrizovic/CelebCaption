@@ -11,18 +11,16 @@ from tensorflow.keras.models import load_model
 from preprocess_audio import process_audio
 import scipy.io.wavfile
 from csv_preprocess import read_csv
-import torchaudio
-torchaudio.set_audio_backend("soundfile")   # change depending on OS, "soundfile" for Windows
 import wget
 from speechbrain.pretrained import SepformerSeparation as separator
 import sounddevice as sd
 import pickle
 import tensorflow as tf
-import torch
 import datetime
+import auditok
 
 
-def PlayVideo(video_path):
+def media_play_video(video_path):
     player = MediaPlayer(video_path)
 
     while True:
@@ -55,7 +53,7 @@ def extract_audio_from_video(video_path):
     wav_path = os.path.join(constants.AUDIO_FOLDER_PATH, "speech.wav")
 
     ''' notes: 1. os.system() demands double quotes around paths containing spaces
-    2. The -y flag forces overwriting the existing file. Remove the flag for a y/N query.
+    2. The -y flag overwrites the existing file. Remove the flag for a y/N query.
     3. -af "pan=mono|FC=FR" converts from stereo to mono (the right channel is used). This
     is necessary in order for process_audio() to work correctly.
     '''
@@ -63,42 +61,31 @@ def extract_audio_from_video(video_path):
     command2wav = f'ffmpeg -i "{mp3_path}" -y "{wav_path}"'
     os.system(command2mp3)  # execute command
     os.system(command2wav)
-    return wav_path
+    return mp3_path, wav_path
 
 
-def speaker_diarization(audio_path):
-    model = separator.from_hparams(source="speechbrain/sepformer-wsj02mix", savedir='pretrained_models/sepformer-wsj02mix')
-    mix, fs = torchaudio.load(audio_path)
-    # resampling because the model being used was trained on 8KHz data.
-    resampler = torchaudio.transforms.Resample(fs, 8000)
-    mix = resampler(mix)
-    est_sources = model.separate_batch(mix)
-    est_sources = est_sources[0]    # strip batch dimension
-
-    pickle.dump(est_sources, open('est_sources.pkl', 'wb'))
-    num_speakers = est_sources.shape[1]
-    audio_paths = []
-    for i in range(num_speakers):
-        path = f'data/test/audio/diarized/speaker_{i}.wav'
-        torchaudio.save(path, torch.unsqueeze(est_sources[:, i], 0), 8000, encoding="PCM_S")
-        audio_paths.append(path)
-    return audio_paths
+def add_audio_to_video(input_video_path, mp3_path, output_video_path):
+    command = f'ffmpeg -i {input_video_path} -i {mp3_path} -y -c copy -map 0:v:0 -map 1:a:0 {output_video_path}'
+    os.system(command)
 
 
-def extract_text_from_audio(audio_path, segment_num, start_time, subs_file_name):
+def extract_text_from_audio(audio_path, subs_file_name, speaker_name, start_time=datetime.datetime(1,1,1,0,0,0,0),
+                            end_time=datetime.datetime(1,1,1,0,0,1,0), segment_num=0):
     """Performs speech recognition
 
     Args:
         audio_path (string): .wav file path
 
     Returns:
-        string: recognized text divided into segments
+        string: recognized text divided into text segments
         no longer than 15 words
     """
     r = sr.Recognizer()
+
     with sr.AudioFile(audio_path) as source:
         audio = r.record(source)
     text = r.recognize_google(audio)
+    print(f'Text: {text}')
     segments = []
     split_txt = text.split(" ")
     length = len(split_txt)
@@ -109,47 +96,35 @@ def extract_text_from_audio(audio_path, segment_num, start_time, subs_file_name)
             if i > length - 15: # last segment
                 segments.append(" ".join(split_txt[i:]))
     else:
-        segments = " ".join(segments)
+        segments = [text]   # 1 segment is enough
 
     for seg in segments:
         segment_num += 1
-        end_time = time_addition(seg, start_time, segment_num, subs_file_name)
+        end_time = write_subs_to_file(seg, start_time, end_time, segment_num, subs_file_name, speaker_name)
         start_time = end_time
-        # add half a second so that subs don't overlap
-        # start_time += datetime.timedelta(0, 0.5)
-
 
     return segments, start_time
 
 
-def time_addition(sentence, current_time, segment_num, subs_file_name):
-    """ Calculates the number of words in a string and adds them in seconds to timestamp"""
+def write_subs_to_file(segment, start_time, end_time, segment_num, subs_file_name, speaker_name):
+    str_start_time = str(start_time.time()).replace(".", ",")   # change fractional separator
+    str_end_time = str(end_time.time()).replace(".", ",") #if you try and write to file without converting you will get type error 'datetime.time'
 
-    time_add = (len(sentence.split()))*0.35 #takes an average of 1 second to read a word so number of words = added seconds
-    end_time = current_time + datetime.timedelta(0, time_add) #add the time in seconds
-    str_current_time = str(current_time.time()) #convert the timestamps to string
-    str_current_time = str_current_time.replace(".", ",")   # change fractional separator
-    str_end_time = str(end_time.time()) #if you try and write to file without converting you will get type error 'datetime.time'
-    str_end_time = str_end_time.replace(".", ",") # change fractional separator
-
-    #now we to add to the .srt
-    #append the time according to the caclulation of number of words per sentence
-    #making sure we are consistent with appropriate formatting of the text file
+    # add to the .srt
     with open(subs_file_name, "a") as f:
         f.write(str(segment_num))
         f.write("\n")
-        f.write(str_current_time)
+        f.write(str_start_time)
         f.write(" --> ")
         f.write(str_end_time)
         f.write("\n")
-        f.write(sentence)
+        f.write(f'{speaker_name}: {segment}')
         f.write("\n")
         f.write("\n")
     return end_time
 
 
-def predict_vggvox(model_weights_path, audio_path):
-    vggvox_model = load_model(model_weights_path)
+def predict_vggvox(vggvox_model, audio_path):
     _, wave = scipy.io.wavfile.read(audio_path, mmap=True)
 
     processed = process_audio(wave)
@@ -167,27 +142,39 @@ def predict_vggvox(model_weights_path, audio_path):
     return name, round(prob*100, 2)
 
 
-def play_audio_file(audio_path):
-    mix, fs = torchaudio.load(audio_path)
-    sd.play(mix.squeeze(), fs)
-    sd.wait()
-
-
 if __name__ == '__main__':
-    video_path = "data/test/video/Bradley Cooper, Lady Gaga/Bradley Cooper, Lady Gaga.mp4"
-    model_path = "weights\with-augmentation.hdf5"
-    # PlayVideo(video_path)
-    # audio_path = extract_audio_from_video(video_path)
-    # audio_paths = speaker_diarization(audio_path)
-    audio_paths = ['data/test/audio/diarized/speaker_0.wav', 'data/test/audio/diarized/speaker_1.wav']
-
+    # original_video_path = "data/test/video/cooper gaga.mp4"
+    original_video_path = "data/test/video/fallon stiller.mp4"
+    processed_video_path = 'processed_video.mp4'
+    output_processed_video_path = 'processed_video_with_audio.mp4'
+    model_weights_path = "weights\with-augmentation.hdf5"
     subs_file_name = "unsynchronized.srt"
     open(subs_file_name, "w").close()  # clear file contents
-    segment_num = 0
-    start_time = datetime.datetime(100,1,1,0,0,1, 10**4)
-    for i in range(len(audio_paths)-1, -1, -1):
-        # name, prob = predict_vggvox(model_path, audio_paths[i])
-        # print(f"Speaker #{i} is {name} with {round(prob*100, 2)}% confidence")
-        segments, start_time = extract_text_from_audio(audio_paths[i], segment_num, start_time, subs_file_name)
-        segment_num += len(segments)
-        # play_audio_file(audio_paths[i])
+    vggvox_model = load_model(model_weights_path)
+
+    mp3_path, wav_path = extract_audio_from_video(original_video_path)
+    add_audio_to_video(processed_video_path, mp3_path, output_processed_video_path)
+
+    # split returns a generator of AudioRegion objects
+    audio_regions = auditok.split(
+        wav_path,
+        min_dur=2,     # minimum duration of a valid audio event in seconds
+        max_dur=6,       # maximum duration of an event
+        max_silence=1, # maximum duration of tolerated continuous silence within an event
+        energy_threshold=10 # threshold of detection
+    )
+
+    for segment_num, r in enumerate(audio_regions):
+        # ignore tiny leftovers at the end of the audio
+        if r.duration >= 2:
+            # Regions returned by `split` have 'start' and 'end' metadata fields
+            region_file_name = f"region_{int(r.meta.start)}-{int(r.meta.end)}.wav"
+            r.save(region_file_name)
+            start_time = datetime.datetime(1,1,1,0,0,int(r.meta.start),0)
+            end_time = datetime.datetime(1,1,1,0,0,int(r.meta.end),0)
+            speaker_name, prob = predict_vggvox(vggvox_model, region_file_name)
+            extract_text_from_audio(region_file_name, subs_file_name, speaker_name,
+                                    start_time, end_time, segment_num)
+
+
+    # media_play_video(output_processed_video_path)
