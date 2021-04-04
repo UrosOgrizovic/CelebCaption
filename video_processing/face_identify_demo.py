@@ -1,3 +1,4 @@
+import os
 from keras.engine import Model
 from keras import models
 from keras import layers
@@ -7,12 +8,11 @@ from keras_vggface import utils
 import numpy as np
 from scipy import spatial
 import cv2
-import os
 import glob
 import pickle
 from time import sleep
-from precompute_features import FaceExtractor
 import face_helpers
+import video_constants as const
 
 
 def load_stuff(filename):
@@ -23,10 +23,7 @@ def load_stuff(filename):
 
 
 class FaceIdentify:
-    """
-    Singleton class for real time face identification
-    """
-    CASE_PATH = ".\\pretrained_models\\haarcascade_frontalface_alt.xml"
+    HAAR_PATH = ".\\pretrained_models\\haarcascade_frontalface_alt.xml"
 
     def __init__(self, input_video_path, output_video_path, precompute_features_file=None):
         self.input_video_path = input_video_path
@@ -38,14 +35,6 @@ class FaceIdentify:
                              input_shape=(224, 224, 3),
                              pooling='avg')  # pooling: None, avg or max
         self.img_model = VGGFace()
-
-
-    def draw_label(self, image, point, label, font=cv2.FONT_HERSHEY_SIMPLEX,
-                   font_scale=1, thickness=2):
-        size = cv2.getTextSize(label, font, font_scale, thickness)[0]
-        x, y = point
-        cv2.rectangle(image, (x, y - size[1]), (x + size[0], y), (255, 0, 0), cv2.FILLED)
-        cv2.putText(image, label, point, font, font_scale, (255, 255, 255), thickness)
 
     def identify_face(self, features, threshold=100):
         """Identify face from features.
@@ -72,7 +61,7 @@ class FaceIdentify:
             return "?"
 
     def detect_face(self):
-        face_cascade = cv2.CascadeClassifier(self.CASE_PATH)
+        face_cascade = cv2.CascadeClassifier(self.HAAR_PATH)
 
         # 0 means the default video capture device in OS
         video_capture = cv2.VideoCapture(self.input_video_path)
@@ -95,41 +84,16 @@ class FaceIdentify:
                 # video over
                 break
             if frame_index % face_identification_period == 0:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = face_cascade.detectMultiScale(
-                    gray,
-                    scaleFactor=1.2,
-                    minNeighbors=10,
-                    minSize=(64, 64)
-                )
-                # placeholder for cropped faces
-                faces_imgs = np.empty((len(faces), self.face_size, self.face_size, 3))
-                rectangles_to_draw = []
-                for i, face in enumerate(faces):
-                    face_img, cropped = face_helpers.crop_face(frame, face, margin=10, size=self.face_size)
-                    rectangles_to_draw.append(cropped)
-                    faces_imgs[i, :, :, :] = face_img
+                gray, faces = face_helpers.instantiate_gray_and_faces(frame, face_cascade)
+                faces_imgs, rectangles_to_draw = self.extract_faces(frame, faces)
                 if len(faces_imgs) > 0:
-                    # generate features for each face
-                    features_faces = self.model.predict(faces_imgs)
-                    predicted_names = [self.identify_face(features_face) for features_face in features_faces]
+                    predicted_names = self.predict_names(faces_imgs)
 
-                    for i in range(len(predicted_names)):
-                        if predicted_names[i] == "?":
-                            features_face = self.img_model.predict(np.expand_dims(faces_imgs[i], axis=0))
-                            res = utils.decode_predictions(features_face)
-                            # take prediction with highest prob
-                            predicted_names[i] = res[0][0][0][2:-1] # [2:-1] is to remove b' and ' from string
-
-            # draw rectangles around heads
-            for rect in rectangles_to_draw:
-                (x, y, w, h) = rect
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 200, 0), 2)
+            draw_rectangles(frame, rectangles_to_draw)
 
             # write names
             for i, face in enumerate(faces):
-                label = "{}".format(predicted_names[i])
-                self.draw_label(frame, (face[0], face[1]), label)
+                draw_label(frame, (face[0], face[1]), predicted_names[i])
 
             video_output.write(frame)
 
@@ -138,13 +102,47 @@ class FaceIdentify:
         cv2.destroyAllWindows()
         print('Video processing completed successfully')
 
+    def extract_faces(self, frame, faces):
+        # placeholder for cropped faces
+        faces_imgs = np.empty((len(faces), self.face_size, self.face_size, 3))
+        rectangles_to_draw = []
+        for i, face in enumerate(faces):
+            face_img, cropped = face_helpers.crop_face(frame, face, margin=10, size=self.face_size)
+            rectangles_to_draw.append(cropped)
+            faces_imgs[i, :, :, :] = face_img
+        return faces_imgs, rectangles_to_draw
 
-def main():
+    def predict_names(self, faces_imgs):
+        # generate features for each face
+        features_faces = self.model.predict(faces_imgs)
+        predicted_names = [self.identify_face(features_face) for features_face in features_faces]
+
+        for i in range(len(predicted_names)):
+            if predicted_names[i] == "?":
+                features_face = self.img_model.predict(np.expand_dims(faces_imgs[i], axis=0))
+                res = utils.decode_predictions(features_face)
+                # take prediction with highest prob
+                predicted_names[i] = res[0][0][0][2:-1] # [2:-1] is to remove b' and ' from string
+        return predicted_names
+
+def draw_label(image, point, label, font=cv2.FONT_HERSHEY_SIMPLEX,
+                   font_scale=1, thickness=2):
+    size = cv2.getTextSize(label, font, font_scale, thickness)[0]
+    x, y = point
+    cv2.rectangle(image, (x, y - size[1]), (x + size[0], y), const.LABEL_COLOR, cv2.FILLED)
+    # cv2.rectangle(image, (x, y - size[1]), (x + size[0], y), const.LABEL_COLOR, 2)
+    cv2.putText(image, label, point, font, font_scale, (255, 255, 255), thickness)
+
+
+def draw_rectangles(frame, rectangles_to_draw):
+    for rect in rectangles_to_draw:
+        (x, y, w, h) = rect
+        cv2.rectangle(frame, (x, y), (x + w, y + h), const.RECTANGLE_COLOR, 2)
+
+
+if __name__ == "__main__":
     input_video_path = "..\\data\\test\\video\\cooper gaga.mp4"
     # input_video_path = "..\\data\\test\\video\\fallon stiller.mp4"
     output_video_path = "../processed_video.mp4"
     face = FaceIdentify(input_video_path, output_video_path, precompute_features_file="./data/precompute_features.pickle")
     face.detect_face()
-
-if __name__ == "__main__":
-    main()

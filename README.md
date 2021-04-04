@@ -10,6 +10,8 @@ Datasets used: [VGG Face](https://www.robots.ox.ac.uk/~vgg/data/vgg_face/), [Vox
 
 The VGGFace model was used for face classification.
 
-The VGGVox model was used for speaker recognition. The weights can be downloaded from [here](https://github.com/KornelZ/vggvox_identification). Aftewards, they should be put inside a `weights` folder.
+The VGGVox model was used for speaker recognition. The weights can be downloaded from [here](https://github.com/KornelZ/vggvox_identification).
 
-[SpeechBrain](https://speechbrain.github.io/index.html) was used for speaker diarization.
+# Notes
+
+Due to the limitations of Google's free API, any video used must be no longer than 30 seconds.

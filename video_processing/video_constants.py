@@ -1,0 +1,2 @@
+RECTANGLE_COLOR = (255, 200, 0) # (B, G, R)
+LABEL_COLOR = (255, 0, 0)
